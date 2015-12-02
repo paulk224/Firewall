@@ -17,9 +17,16 @@ class Firewall:
 	self.TCP_rules = []
 	self.UDP_rules = []
 	self.ICMP_rules = []
+
+        # http log state variables
+        self.TCP_connections = {}
+        self.http_logFile = open('http.log', 'w+')
+
 	with open(config['rule'], 'r') as file:
 		for line in file:
 			if line[0] != "\n" and line[0] != '%':
+                                if line[0].upper() == 'L' and line[1].upper() == 'O' and line[2].upper() == 'G':
+                                        self.TCP_rules.append(line)
 				if line[5].upper() == 'T' and line[6].upper() == 'C' and line[7].upper() == 'P':
 					self.TCP_rules.append(line)
 				if line[5].upper() == 'U' and line[6].upper() == 'D' and line[7].upper() == 'P':
@@ -27,7 +34,7 @@ class Firewall:
 				if line[5].upper() == 'I' and line[6].upper() == 'C' and line[7].upper() == 'M' and line[8].upper() == 'P':	
 					self.ICMP_rules.append(line)
 				if line[5].upper() == 'D' and line[6].upper() == 'N' and line[7].upper() == 'S':
-					self.UDP_rules.append(line)
+					self.UDP_rules.append(line)]
 
 	with open('geoipdb.txt', 'r') as file2:
 		for line2 in file2:
@@ -52,13 +59,17 @@ class Firewall:
 				return
 		if pkt_dir == PKT_DIR_OUTGOING:
 			external_address = socket.inet_ntoa(pkt[16:20])
+			internal_address = socket.inet_ntoa(pkt[12:16])                        
 		else:
-			external_address = socket.inet_ntoa(pkt[12:16])
+			external_address = socket.inet_ntoa(pkt[12:16]) 
+			internal_address = socket.inet_ntoa(pkt[16:20])                        
 		if protocol == 6 or protocol == 17:
 			if pkt_dir == PKT_DIR_OUTGOING:
 				external_port = struct.unpack('!H', pkt[IHL*4 + 2: IHL*4 + 4])[0]
+                                internal_port = struct.unpack('!H', pkt[IHL*4: IHL*4 + 2])[0]
 			else:
 				external_port = struct.unpack('!H', pkt[IHL*4: IHL*4 + 2])[0]
+                                internal_port = struct.unpack('!H', pkt[IHL*4 + 2: IHL*4 + 4])[0]
 			if protocol == 17:
 				DNS_offset = IHL*4 + 8
 				question_offset = DNS_offset + 12
@@ -88,11 +99,11 @@ class Firewall:
 								length_qname -= 1
 							new_offset += count
 							if length_qname > 1:
-								domain_name += '.'	
+								domain_name += '.'
 	
 		if protocol == 1:
 			external_port = ord(pkt[IHL])
-		deny_pass = self.handle_rules(protocol, external_address, external_port, domain_name, DNS)
+		deny_pass = self.handle_rules(protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt, pkt_dir)
 		if deny_pass == True:
 			if pkt_dir == PKT_DIR_INCOMING: 
 				self.iface_int.send_ip_packet(pkt)
@@ -107,8 +118,10 @@ class Firewall:
 	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
 		print("mistakes were made")
 		return
-    def handle_rules(self, protocol, external_address, external_port, domain_name, DNS):
+    def handle_rules(self, protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, packet):
 	matches_DNS = False
+        http = external_port == 80 #true if packet is an http request or response
+        
 	if protocol == 17:
 		rules = list(self.UDP_rules)
 		while len(rules) > 0:
@@ -120,7 +133,8 @@ class Firewall:
 				elif '*' in rule_split[2]:
 					DNS_name = rule_split[2].replace('*', '')
 					if domain_name.endswith(DNS_name):
-						matches_DNS = True	
+						matches_DNS = True
+                            
 			matches_port = False
 			matches_address = False
 			if rule_split[2] == 'any' or external_address == rule_split[2]:
@@ -161,6 +175,108 @@ class Firewall:
 		while len(rules2) > 0:
 			rule = rules2.pop()
 			rule_split = rule.lower().split()
+
+                        #if the rule is log, process seperately
+                        if rule_split[0] == 'log':
+                            if http:
+                                #defines identifier (5-tuple curr) and pair_id (5_tuple pair)
+                                identifier = (internal_address, internal_port, external_address, external_port, pkt_dir)
+                                if pkt_dir == PKT_DIR_INCOMING:
+                                    pair_dir = PKT_DIR_OUTGOING
+                                else:
+                                    pair_dir = PKT_DIR_INCOMING
+                                pair_id = (internal_address, internal_port, external_address, external_port, pair_dir)
+
+                                #find the start of the TCP payload (i.e. the http header)
+                                IHL = ord(pkt[0]) & 0x0f
+                                TCP_offset = ord(pkt[IHL*4 + 12]) & 0xf0
+                                TCP_payload = struct.unpack("!s", pkt[IHL*4 + TCP_offset * 4:])
+                                TCP_seq = struct.unpack("!L", pkt[IHL*4 + 4: IHL*4 + 8])[0]                            
+
+                                #existing connection
+                                if identifier in self.TCP_connections:
+                                    http_pkt, pkt_seq = self.TCP_connections.get(identifier)[0], self.TCP_connections.get(identifier)[1]
+                                    #if seq is what's expected, recognize as the next packet in line
+                                    if pkt_seq == TCP_seq:
+                                        http_pkt += TCP_payload
+                                        next_seq = pkt_seq + len(TCP_payload/4)
+                                    #let through old packets and drop all ones past expected
+                                    if pkt_seq < TCP_seq:
+                                        continue
+                                    if pkt_seq > TCP_seq:
+                                        return False
+
+                                #new connection, grab the http portion of the packet and calc the expected next seq
+                                #note: if not SYN packet, cannot be new connection/out of order packet, therefore drop
+                                else:
+                                    SYN_flag = ord(pkt[IHL + 13*4]) & 0x02
+                                    http_pkt = TCP_payload
+                                    if SYN_flag:
+                                        next_seq = TCP_seq + 1
+                                    else:
+                                        return False
+
+                                #once the packet is fully transmitted
+                                if "\r\n\r\n" in http_packet:
+                                    #parse the http information
+                                    http_header = http_packet.split("\r\n\r\n")[0]
+                                    http_header = http_header.lower().split("\r\n").split(":")
+
+                                    # if it's a request http packet
+                                    if pkt_dir == PKT_DIR_OUTCOMING:
+                                        # get host name
+                                        if "host" in http_header:
+                                            http_host = http_header[http_header.index("host") + 1]
+                                        else:
+                                            http_host = external_address
+
+                                        #reusing domain matching algorithm, but modified for host name
+                                        hostNameMatch = False
+			                if rule_split[2] == host_name:
+				            hostNameMatch = True
+			                elif '*' in rule_split[2]:
+				            host_name = rule_split[2].replace('*', '')
+				            if http_host.endswith(host_name):
+				                hostNameMatch = True
+
+                                        #if it matches, start parsing
+                                        if hostNameMatch:
+                                            fields = {}
+                                            fields["host"] = host_name
+                                            fields["method"] = http_header[0].split(" ")[0].upper()
+                                            fields["path"] = http_header[0].split(" ")[1]
+                                            fields["version"] = http_header[0].split(" ")[2].upper()
+
+                                            #save to TCP_connections
+                                            self.TCP_connections[identifier] = ("", next_seq, True, fields)
+
+                                    #if it's a response packet
+                                    else:
+                                        #check for valid partner
+                                        partner = TCP_connections.get(pair_id)
+                                        if pair_id in self.TCP_connections and TCP_connections.get(pair_id)[2]:
+                                            #parse necessary fields
+                                            fields = TCP_connections.get(identifier)
+                                            fields["status"] = http_header[0].split(" ")[1]
+                                            fields["size"] = http_header[http_header.index("content-type") + 1]    
+
+                                            #create log
+                                            http_log = fields["host"] + fields["method"] + fields["path"] + fields["version"] + fields["status"] + fields["size"] + "/r/n"
+                                            TCP_connections[pair_id] = (
+                                            self.http_logFile.write(http_log)
+                                            
+                                #if the packet is not fully transmitted
+                                else:
+                                    #save existing packet information to the connections
+                                    TCP_connections[identifier] = (http_packet, next_seq, False, {})
+                                    continue
+
+                            # log rules do nothing for non http packets
+                            else:
+                                continue
+                                    
+                        #run normal tcp_rulematching otherwise
+                        else:
 			matches_port = False
 			matches_address = False
 			if rule_split[2] == 'any' or external_address == rule_split[2]:
