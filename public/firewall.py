@@ -24,7 +24,6 @@ class Firewall:
 
 	with open(config['rule'], 'r') as file:
 		for line in file:
-                        print line
 			if line[0] != "\n" and line[0] != '%':
                                 if line[0].upper() == 'L' and line[1].upper() == 'O' and line[2].upper() == 'G':
                                         self.TCP_rules.append(line)
@@ -44,7 +43,7 @@ class Firewall:
     # @pkt_dir: either PKT_DIR_INCOMING or PKT_DIR_OUTGOING
     # @pkt: the actual data of the IPv4 packet (including IP header)
     def handle_packet(self, pkt_dir, pkt):
-#	try:
+	try:
 		internal_port = 0
 		external_port = 0
 		internal_address = 0
@@ -111,11 +110,12 @@ class Firewall:
 			external_port = ord(pkt[IHL])
 		deny_pass = self.handle_rules(protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt)
 		if deny_pass == True:
-                        print "through", pkt_dir
+                        print("through")
 			if pkt_dir == PKT_DIR_INCOMING:
 				self.iface_int.send_ip_packet(pkt)
 			else:
 				self.iface_ext.send_ip_packet(pkt)
+			return
 		elif deny_pass == False:
 			print("never")
 			if protocol == 6:
@@ -123,9 +123,9 @@ class Firewall:
 			if DNS == True:
 				self.make_DNS(pkt, IHL*4, DNS_offset, store_length, pkt_dir)
 			return
-#	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
-#		print("mistakes were made")
-#		return
+	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
+		print("mistakes were made")
+		return
     def handle_rules(self, protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt):
 
 	matches_DNS = False
@@ -312,7 +312,7 @@ class Firewall:
                         #run normal tcp_rulematching otherwise
                         else:
                                 print "in tcp normal matchmaking"
-			        matches_port = False
+				matches_port = False
 			        matches_address = False
 			        if rule_split[2] == 'any' or external_address == rule_split[2]:
 				        matches_address = True
@@ -339,6 +339,7 @@ class Firewall:
 			        else:
 				        continue
                 #returns true
+			return True
 		return True		
 				
     def bin_geo_search(self, country, address, first, last):
@@ -368,7 +369,8 @@ class Firewall:
 	DNS_packet += pkt[1:2]
 	packet_length = 20 + 8 + 12 + qname_length + 4 + qname_length + 10 + 4
 	DNS_packet += struct.pack('!H', packet_length)
-	DNS_packet += pkt[4:8]
+	#DNS_packet += pkt[4:8]
+	DNS_packet += struct.pack('!L', 0x0)
 	DNS_packet += struct.pack('!L', 0x80110000)
 	DNS_packet += pkt[16:20]
 	DNS_packet += pkt[12:16]
@@ -388,7 +390,7 @@ class Firewall:
 	DNS_packet += struct.pack('!L', 0x00010001)
 	DNS_packet += question
 	DNS_packet += struct.pack('!L', 0x00010001)
-	DNS_packet += struct.pack('!L', 0x1)
+	DNS_packet += struct.pack('!L', 0x3C)
 	DNS_packet += struct.pack('!H', 0x4)
 	DNS_packet += struct.pack('!L', 0xA9E53182)
 	if pkt_dir == PKT_DIR_INCOMING:
@@ -401,7 +403,8 @@ class Firewall:
 	RST_packet += struct.pack('!B', 0x45)
 	RST_packet += pkt[1]
 	RST_packet += struct.pack('!H', 0x28)
-	RST_packet += pkt[4:8]
+	#RST_packet += pkt[4:8]
+	RST_packet += struct.pack('!L', 0x0)
 	#RST_packet += struct.pack('!B', 0x80)
 	#RST_packet += struct.pack('!B', 0x6)
 	#RST_packet += struct.pack('!H', 0x0)
