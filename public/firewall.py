@@ -67,6 +67,7 @@ class Firewall:
 					while ord(pkt[question_offset + length_qname: question_offset + length_qname + 1]) != 0:
 						length_qname += 1
 					length_qname += 1
+					store_length = length_qname
 					QType_offset = question_offset + length_qname
 					QDCount = struct.unpack('!H', pkt[DNS_offset + 4 : DNS_offset + 6])[0]
 					QType = struct.unpack('!H', pkt[QType_offset : QType_offset + 2])[0]
@@ -100,9 +101,9 @@ class Firewall:
 				self.iface_ext.send_ip_packet(pkt)
 		elif deny_pass == False:
 			if protocol == 6:
-				self.make_RST(self, pkt, IHL*4, pkt_dir)
+				self.make_RST(pkt, IHL*4, pkt_dir)
 			if DNS == True:
-				
+				self.make_DNS(pkt, IHL*4, DNS_offset, store_length, pkt_dir)
 			return
 	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
 		print("mistakes were made")
@@ -143,11 +144,11 @@ class Firewall:
 					if external_port in range(int(port_range[0]), int(port_range[1]) + 1):
 						matches_port = True 
 			if matches_port == True and matches_address == True:
-				if rule_split[0] == 'drop':
+				if rule_split[0] == 'drop' or rule_split[0] == 'deny':
 					return False
 				return True
 			if DNS == True and matches_DNS == True:
-				if rule_split[0] == 'drop':
+				if rule_split[0] == 'drop' or rule_split[0] == 'deny':
 					return False
 				return True
 			else:
@@ -182,7 +183,7 @@ class Firewall:
 				if external_port in range(int(port_range[0]), int(port_range[1]) + 1):
 					matches_port = True 
 			if matches_port == True and matches_address == True:
-				if rule_split[0] == 'drop':
+				if rule_split[0] == 'drop' or rule_split[0] == 'deny':
 					return False
 				return True
 			else:
@@ -209,6 +210,40 @@ class Firewall:
     def sorry_inet_aton(self, address):
 	num = address.split('.')
 	return int(num[3]) + 1000 * int(num[2]) + 1000000 * int(num[1]) + 1000000000 * int(num[0])
+
+    def make_DNS(self, pkt, header_offset, DNS_offset, qname_length, pkt_dir):
+	DNS_packet = ''
+	DNS_packet += struct.pack('!B', 0x45)
+	DNS_packet += pkt[1:2]
+	packet_length = 20 + 8 + 12 + qname_length + 4 + qname_length + 10 + 4
+	DNS_packet += struct.pack('!H', packet_length)
+	DNS_packet += pkt[4:8]
+	DNS_packet += struct.pack('!L', 0x80110000)
+	DNS_packet += pkt[16:20]
+	DNS_packet += pkt[12:16]
+	checksum = self.calc_checksum(20, DNS_packet)
+	DNS_packet = DNS_packet[0:10] + checksum + DNS_packet[12:20]
+	DNS_packet += struct.pack('!H', 0x35)
+	DNS_packet += pkt[header_offset:header_offset+2]
+	DNS_packet += struct.pack('!H', packet_length - 20)
+	DNS_packet += struct.pack('!H', 0x0)
+	DNS_packet += pkt[DNS_offset: DNS_offset+2]
+	DNS_packet += struct.pack('!B', 0x81)
+	DNS_packet += struct.pack('!B', 0x00)
+	DNS_packet += struct.pack('!L', 0x00010001)
+	DNS_packet += struct.pack('!L', 0x0)
+	question = pkt[DNS_offset + 12: DNS_offset + qname_length + 12]
+	DNS_packet += question 
+	DNS_packet += struct.pack('!L', 0x00010001)
+	DNS_packet += question
+	DNS_packet += struct.pack('!L', 0x00010001)
+	DNS_packet += struct.pack('!L', 0x1)
+	DNS_packet += struct.pack('!H', 0x4)
+	DNS_packet += struct.pack('!L', 0xA9E53182)
+	if pkt_dir == PKT_DIR_INCOMING:
+		self.iface_int.send_ip_packet(DNS_packet)
+	else:
+		self.iface_ext.send_ip_packet(DNS_packet)
 
     def make_RST(self, pkt, header_offset, pkt_direction):
 	RST_packet = ''
@@ -249,15 +284,16 @@ class Firewall:
 		self.iface_ext.send_ip_packet(RST_packet)
 
     def calc_checksum(self, header_size, RST_packet):
-	checksum, i = 0
-	for i < header_size:
+	checksum = 0
+	for i in range(0, header_size, 2):
 		checksum += struct.unpack('!H', RST_packet[i:i+2])[0]
 		i += 2
-	if checksum >> 16:
-		while checksum >> 16:
+	if checksum >> 16 != 0:
+		while checksum >> 16 != 0:
 			checksum = (checksum >> 16) + (checksum & 0xFFFF)
 	checksum = ~checksum
-	checksum = struct.unpack('!H', checksum)
+	checksum = checksum & 0xFFFF
+	checksum = struct.pack('!H', checksum)
 	return checksum
 
 
