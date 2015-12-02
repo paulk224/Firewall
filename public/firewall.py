@@ -110,11 +110,13 @@ class Firewall:
 			external_port = ord(pkt[IHL])
 		deny_pass = self.handle_rules(protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt)
 		if deny_pass == True:
+			print("always")
 			if pkt_dir == PKT_DIR_INCOMING: 
 				self.iface_int.send_ip_packet(pkt)
 			else:
 				self.iface_ext.send_ip_packet(pkt)
 		elif deny_pass == False:
+			print("never")
 			if protocol == 6:
 				self.make_RST(pkt, IHL*4, pkt_dir)
 			if DNS == True:
@@ -164,7 +166,6 @@ class Firewall:
 						matches_port = True 
 			if matches_port == True and matches_address == True:
 				if rule_split[0] == 'drop' or rule_split[0] == 'deny':
-					print("hum")
 					return False
 				return True
 			if DNS == True and matches_DNS == True:
