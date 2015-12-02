@@ -49,7 +49,6 @@ class Firewall:
 		internal_address = 0
 		external_address = 0
 		domain_name = ''
-		QType = 0
 		DNS = False
 		IHL = ord(pkt[0]) & 0x0f
 	      	if IHL < 5:
@@ -111,17 +110,14 @@ class Firewall:
 			external_port = ord(pkt[IHL])
 		deny_pass = self.handle_rules(protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt)
 		if deny_pass == True:
-                        print("through")
 			if pkt_dir == PKT_DIR_INCOMING:
 				self.iface_int.send_ip_packet(pkt)
 			else:
 				self.iface_ext.send_ip_packet(pkt)
-			return
 		elif deny_pass == False:
-			print("never")
 			if protocol == 6:
 				self.make_RST(pkt, IHL*4, pkt_dir)
-			if DNS == True and QType == 1:
+			if DNS == True:
 				self.make_DNS(pkt, IHL*4, DNS_offset, store_length, pkt_dir)
 			return
 	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
@@ -133,7 +129,7 @@ class Firewall:
         http = external_port == 80 #true if packet is an http request or response
         
 	if protocol == 17:
-                print "p - 17"
+                #print "p - 17"
 		rules = list(self.UDP_rules)
 		while len(rules) > 0:
 			rule = rules.pop()
@@ -180,22 +176,21 @@ class Firewall:
 		return True
 	else:
 		if protocol == 1:
-                        print "p = 1"
+                        #print "p = 1"
 			rules2 = list(self.ICMP_rules)
 		else:
-                        print "p = 6"
+                        #print "p = 6"
 			rules2 = list(self.TCP_rules)
 		
 		while len(rules2) > 0:
-                        print "tcp rules length ", len(rules2)
 			rule = rules2.pop()
 			rule_split = rule.lower().split()
 
                         #if the rule is log, process seperately
                         if rule_split[0] == 'log':
-                            print "in log rule"
+                            #print "in log rule"
                             if http:
-                                print "in http connection",
+                                #print "in http connection",
                                 #defines identifier (5-tuple curr) and pair_id (5_tuple pair)
                                 identifier = (internal_address, internal_port, external_address, external_port, pkt_dir)
                                 if pkt_dir == PKT_DIR_INCOMING:
@@ -207,15 +202,18 @@ class Firewall:
                                 #find the start of the TCP payload (i.e. the http header)
                                 IHL = ord(pkt[0]) & 0x0f
                                 TCP_offset = ord(pkt[IHL*4 + 12]) & 0xf0
+                                TCP_offset = TCP_offset >> 4
                                 TCP_payload = pkt[IHL*4 + TCP_offset * 4:]
-                                TCP_seq = struct.unpack('!L', pkt[IHL*4 + 4: IHL*4 + 8])[0]                            
+                                TCP_seq = struct.unpack('!L', pkt[IHL*4 + 4: IHL*4 + 8])[0]
 
                                 #existing connection
                                 if identifier in self.TCP_connections:
+                                    #print "old connection", identifier
                                     http_packet, pkt_seq = self.TCP_connections.get(identifier)[0], self.TCP_connections.get(identifier)[1]
                                     #if seq is what's expected, recognize as the next packet in line
                                     FIN_flag = ord(pkt[IHL*4 + 13]) & 0x01
                                     if FIN_flag:
+                                        http_packet = http_packet + TCP_payload
                                         next_seq = TCP_seq + 1
                                     elif pkt_seq == TCP_seq:
                                         http_packet += TCP_payload
@@ -229,6 +227,7 @@ class Firewall:
                                 #new connection, grab the http portion of the packet and calc the expected next seq
                                 #note: if not SYN packet, cannot be new connection/out of order packet, therefore ignore
                                 else:
+                                    #print "new connection", identifier
                                     SYN_flag = ord(pkt[IHL*4 + 13]) & 0x02
                                     http_packet = TCP_payload
                                     if SYN_flag:
@@ -238,11 +237,13 @@ class Firewall:
 
                                 #once the packet is fully transmitted
                                 if "\r\n\r\n" in http_packet:
-                                    print http_packet
+                                    #print "packet fully received"
                                     #parse the http information
                                     http_header = http_packet.split("\r\n\r\n")[0]
+                                    #print http_header
                                     http_header1 = http_header.lower().split("\r\n")
                                     http_header = []
+
                                     for line in http_header1:
                                         if ':' in line:
                                             field = line.split(":")
@@ -258,6 +259,7 @@ class Firewall:
                                             http_host = http_header[http_header.index("host") + 1]
                                         else:
                                             http_host = external_address
+                                        #print "request pkt", http_host
 
                                         #reusing domain matching algorithm, but modified for host name
                                         hostNameMatch = False
@@ -271,34 +273,42 @@ class Firewall:
                                         #if it matches, start parsing
                                         if hostNameMatch:
                                             fields = {}
-                                            print http_header[0]
-                                            fields["host"] = host_name
+                                            #print "parsing request", http_header[0]
+                                            fields["host"] = http_host.strip()
                                             fields["method"] = http_header[0].split(" ")[0].upper()
                                             fields["path"] = http_header[0].split(" ")[1]
                                             fields["version"] = http_header[0].split(" ")[2].upper()
+                                            #print fields
 
                                             #save to TCP_connections
                                             self.TCP_connections[identifier] = ("", next_seq, True, fields)
 
                                     #if it's a response packet
                                     else:
+                                        print"response packet"
                                         #check for valid partner
                                         partner = self.TCP_connections.get(pair_id)
                                         if pair_id in self.TCP_connections and self.TCP_connections.get(pair_id)[2]:
                                             #parse necessary fields
-                                            fields = self.TCP_connections.get(identifier)
-                                            fields["status"] = http_header[0].split(" ")[1]
-                                            fields["size"] = http_header[http_header.index("content-type") + 1]    
+                                            fields = self.TCP_connections.get(pair_id)[3]
+                                            #print "before more fields", fields
+                                            line1 = http_header[0].split(" ")[2:]
+                                            status = ""
+                                            for word in line1:
+                                                status = status + word + " "
+                                            fields["status"] = status
+                                            fields["size"] = http_header[http_header.index("content-length") + 1].strip()  
 
                                             #create log
-                                            http_log = fields["host"] + fields["method"] + fields["path"] + fields["version"] + fields["status"] + fields["size"] + "/r/n"
+                                            http_log = fields["host"] + " " + fields["method"] + " " + fields["path"] + " " + fields["version"] + " " + fields["status"] + fields["size"] + "\r\n"
 
                                             #delete the packet string
-                                            TCP_connections[identifier] = ("", next_seq, False, {})
+                                            self.TCP_connections[identifier] = ("", next_seq, False, {})
 
                                             #save log and print the results
-                                            print http_log
+                                            #print http_log
                                             self.http_logFile.write(http_log)
+                                            self.http_logFile.flush()
                                             
                                 #if the packet is not fully transmitted
                                 else:
@@ -312,8 +322,8 @@ class Firewall:
                                     
                         #run normal tcp_rulematching otherwise
                         else:
-                                print "in tcp normal matchmaking"
-				matches_port = False
+                                #print "in tcp normal matchmaking"
+			        matches_port = False
 			        matches_address = False
 			        if rule_split[2] == 'any' or external_address == rule_split[2]:
 				        matches_address = True
@@ -340,7 +350,6 @@ class Firewall:
 			        else:
 				        continue
                 #returns true
-			return True
 		return True		
 				
     def bin_geo_search(self, country, address, first, last):
@@ -370,8 +379,7 @@ class Firewall:
 	DNS_packet += pkt[1:2]
 	packet_length = 20 + 8 + 12 + qname_length + 4 + qname_length + 10 + 4
 	DNS_packet += struct.pack('!H', packet_length)
-	#DNS_packet += pkt[4:8]
-	DNS_packet += struct.pack('!L', 0x0)
+	DNS_packet += pkt[4:8]
 	DNS_packet += struct.pack('!L', 0x80110000)
 	DNS_packet += pkt[16:20]
 	DNS_packet += pkt[12:16]
@@ -391,7 +399,7 @@ class Firewall:
 	DNS_packet += struct.pack('!L', 0x00010001)
 	DNS_packet += question
 	DNS_packet += struct.pack('!L', 0x00010001)
-	DNS_packet += struct.pack('!L', 0x3C)
+	DNS_packet += struct.pack('!L', 0x1)
 	DNS_packet += struct.pack('!H', 0x4)
 	DNS_packet += struct.pack('!L', 0xA9E53182)
 	self.iface_int.send_ip_packet(DNS_packet)
@@ -402,8 +410,7 @@ class Firewall:
 	RST_packet += struct.pack('!B', 0x45)
 	RST_packet += pkt[1]
 	RST_packet += struct.pack('!H', 0x28)
-	#RST_packet += pkt[4:8]
-	RST_packet += struct.pack('!L', 0x0)
+	RST_packet += pkt[4:8]
 	#RST_packet += struct.pack('!B', 0x80)
 	#RST_packet += struct.pack('!B', 0x6)
 	#RST_packet += struct.pack('!H', 0x0)
