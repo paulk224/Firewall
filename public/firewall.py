@@ -44,6 +44,10 @@ class Firewall:
     # @pkt: the actual data of the IPv4 packet (including IP header)
     def handle_packet(self, pkt_dir, pkt):
 	try:
+		internal_port = 0
+		external_port = 0
+		internal_address = 0
+		external_address = 0
 		domain_name = ''
 		DNS = False
 		IHL = ord(pkt[0]) & 0x0f
@@ -106,7 +110,6 @@ class Firewall:
 			external_port = ord(pkt[IHL])
 		deny_pass = self.handle_rules(protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt)
 		if deny_pass == True:
-			print("let's go!")
 			if pkt_dir == PKT_DIR_INCOMING: 
 				self.iface_int.send_ip_packet(pkt)
 			else:
@@ -161,6 +164,7 @@ class Firewall:
 						matches_port = True 
 			if matches_port == True and matches_address == True:
 				if rule_split[0] == 'drop' or rule_split[0] == 'deny':
+					print("hum")
 					return False
 				return True
 			if DNS == True and matches_DNS == True:
@@ -366,7 +370,7 @@ class Firewall:
 	DNS_packet += struct.pack('!L', 0x00010001)
 	DNS_packet += question
 	DNS_packet += struct.pack('!L', 0x00010001)
-	DNS_packet += struct.pack('!L', 0x1)
+	DNS_packet += struct.pack('!L', 0x3C)
 	DNS_packet += struct.pack('!H', 0x4)
 	DNS_packet += struct.pack('!L', 0xA9E53182)
 	if pkt_dir == PKT_DIR_INCOMING:
