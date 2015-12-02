@@ -49,6 +49,7 @@ class Firewall:
 		internal_address = 0
 		external_address = 0
 		domain_name = ''
+		QType = 0
 		DNS = False
 		IHL = ord(pkt[0]) & 0x0f
 	      	if IHL < 5:
@@ -120,7 +121,7 @@ class Firewall:
 			print("never")
 			if protocol == 6:
 				self.make_RST(pkt, IHL*4, pkt_dir)
-			if DNS == True:
+			if DNS == True and QType == 1:
 				self.make_DNS(pkt, IHL*4, DNS_offset, store_length, pkt_dir)
 			return
 	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
