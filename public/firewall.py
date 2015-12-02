@@ -34,7 +34,7 @@ class Firewall:
 				if line[5].upper() == 'I' and line[6].upper() == 'C' and line[7].upper() == 'M' and line[8].upper() == 'P':	
 					self.ICMP_rules.append(line)
 				if line[5].upper() == 'D' and line[6].upper() == 'N' and line[7].upper() == 'S':
-					self.UDP_rules.append(line)]
+					self.UDP_rules.append(line)
 
 	with open('geoipdb.txt', 'r') as file2:
 		for line2 in file2:
@@ -120,6 +120,7 @@ class Firewall:
 		print("mistakes were made")
 		return
     def handle_rules(self, protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, packet):
+        print "in handle rules"
 	matches_DNS = False
         http = external_port == 80 #true if packet is an http request or response
         
@@ -179,7 +180,9 @@ class Firewall:
 
                         #if the rule is log, process seperately
                         if rule_split[0] == 'log':
+                            print "in log rule"
                             if http:
+                                print "in http connection"
                                 #defines identifier (5-tuple curr) and pair_id (5_tuple pair)
                                 identifier = (internal_address, internal_port, external_address, external_port, pkt_dir)
                                 if pkt_dir == PKT_DIR_INCOMING:
@@ -198,7 +201,10 @@ class Firewall:
                                 if identifier in self.TCP_connections:
                                     http_pkt, pkt_seq = self.TCP_connections.get(identifier)[0], self.TCP_connections.get(identifier)[1]
                                     #if seq is what's expected, recognize as the next packet in line
-                                    if pkt_seq == TCP_seq:
+                                    FIN_flag = ord(pkt[IHL + 13*4]) & 0x01
+                                    if FIN_flag:
+                                        next_seq = TCP_seq + 1
+                                    elif pkt_seq == TCP_seq:
                                         http_pkt += TCP_payload
                                         next_seq = pkt_seq + len(TCP_payload/4)
                                     #let through old packets and drop all ones past expected
@@ -263,7 +269,12 @@ class Firewall:
 
                                             #create log
                                             http_log = fields["host"] + fields["method"] + fields["path"] + fields["version"] + fields["status"] + fields["size"] + "/r/n"
-                                            TCP_connections[pair_id] = (
+
+                                            #delete the packet string
+                                            TCP_connections[identifier] = ("", next_seq, False, {})
+
+                                            #save log and print the results
+                                            print http_log
                                             self.http_logFile.write(http_log)
                                             
                                 #if the packet is not fully transmitted
@@ -278,33 +289,33 @@ class Firewall:
                                     
                         #run normal tcp_rulematching otherwise
                         else:
-			matches_port = False
-			matches_address = False
-			if rule_split[2] == 'any' or external_address == rule_split[2]:
-				matches_address = True
-			elif '/' in rule_split[2]:
-				address = struct.unpack('!L', socket.inet_aton(external_address))[0]
-				interpret = rule_split[2].split('/')
-				network_prefix, mask_bits = interpret[0], interpret[1]
-				address2 = struct.unpack('!L', socket.inet_aton(network_prefix))[0]
-				netmask = ~((1 << 32 - int(mask_bits)) - 1)
-				if address & netmask == address2 & netmask:
-					matches_address = True
-			elif rule_split[2] != 'any' and rule_split[2].isalpha():
-				matches_address = self.bin_geo_search(rule_split[2], external_address, 0, len(self.geo) - 1)
-			if rule_split[3] == 'any' or rule_split[3] == str(external_port):
-				matches_port = True
-			elif '-' in rule_split[3]:
-				port_range = rule_split[3].split('-')
-				if external_port in range(int(port_range[0]), int(port_range[1]) + 1):
-					matches_port = True 
-			if matches_port == True and matches_address == True:
-				if rule_split[0] == 'drop' or rule_split[0] == 'deny':
-					return False
-				return True
-			else:
-				continue
-		return True		
+			        matches_port = False
+			        matches_address = False
+			        if rule_split[2] == 'any' or external_address == rule_split[2]:
+				        matches_address = True
+			        elif '/' in rule_split[2]:
+				        address = struct.unpack('!L', socket.inet_aton(external_address))[0]
+				        interpret = rule_split[2].split('/')
+				        network_prefix, mask_bits = interpret[0], interpret[1]
+				        address2 = struct.unpack('!L', socket.inet_aton(network_prefix))[0]
+				        netmask = ~((1 << 32 - int(mask_bits)) - 1)
+				        if address & netmask == address2 & netmask:
+					        matches_address = True
+			        elif rule_split[2] != 'any' and rule_split[2].isalpha():
+				        matches_address = self.bin_geo_search(rule_split[2], external_address, 0, len(self.geo) - 1)
+			        if rule_split[3] == 'any' or rule_split[3] == str(external_port):
+				        matches_port = True
+			        elif '-' in rule_split[3]:
+				        port_range = rule_split[3].split('-')
+				        if external_port in range(int(port_range[0]), int(port_range[1]) + 1):
+					        matches_port = True 
+			        if matches_port == True and matches_address == True:
+				        if rule_split[0] == 'drop' or rule_split[0] == 'deny':
+					        return False
+				        return True
+			        else:
+				        continue
+		        return True		
 				
     def bin_geo_search(self, country, address, first, last):
 	if first > last:
