@@ -104,8 +104,9 @@ class Firewall:
 	
 		if protocol == 1:
 			external_port = ord(pkt[IHL])
-		deny_pass = self.handle_rules(protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt, pkt_dir)
+		deny_pass = self.handle_rules(protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt)
 		if deny_pass == True:
+			print("let's go!")
 			if pkt_dir == PKT_DIR_INCOMING: 
 				self.iface_int.send_ip_packet(pkt)
 			else:
@@ -119,7 +120,7 @@ class Firewall:
 	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
 		print("mistakes were made")
 		return
-    def handle_rules(self, protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, packet):
+    def handle_rules(self, protocol, internal_address, internal_port, pkt_dir, external_address, external_port, domain_name, DNS, pkt):
         print "in handle rules"
 	matches_DNS = False
         http = external_port == 80 #true if packet is an http request or response
@@ -174,6 +175,7 @@ class Firewall:
 			rules2 = list(self.ICMP_rules)
 		else:
 			rules2 = list(self.TCP_rules)
+		
 		while len(rules2) > 0:
 			rule = rules2.pop()
 			rule_split = rule.lower().split()
@@ -315,7 +317,7 @@ class Firewall:
 				        return True
 			        else:
 				        continue
-		        return True		
+		return True		
 				
     def bin_geo_search(self, country, address, first, last):
 	if first > last:
