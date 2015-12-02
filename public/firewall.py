@@ -34,7 +34,7 @@ class Firewall:
 				if line[5].upper() == 'I' and line[6].upper() == 'C' and line[7].upper() == 'M' and line[8].upper() == 'P':	
 					self.ICMP_rules.append(line)
 				if line[5].upper() == 'D' and line[6].upper() == 'N' and line[7].upper() == 'S':
-					self.UDP_rules.append(line)]
+					self.UDP_rules.append(line)
 
 	with open('geoipdb.txt', 'r') as file2:
 		for line2 in file2:
