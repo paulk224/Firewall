@@ -44,6 +44,7 @@ class Firewall:
     # @pkt: the actual data of the IPv4 packet (including IP header)
     def handle_packet(self, pkt_dir, pkt):
 	try:
+		QType = 0
 		internal_port = 0
 		external_port = 0
 		internal_address = 0
@@ -117,7 +118,7 @@ class Firewall:
 		elif deny_pass == False:
 			if protocol == 6:
 				self.make_RST(pkt, IHL*4, pkt_dir)
-			if DNS == True:
+			if DNS == True and QType == 1:
 				self.make_DNS(pkt, IHL*4, DNS_offset, store_length, pkt_dir)
 			return
 	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
@@ -398,11 +399,8 @@ class Firewall:
 	DNS_packet += struct.pack('!L', 0x1)
 	DNS_packet += struct.pack('!H', 0x4)
 	DNS_packet += struct.pack('!L', 0xA9E53182)
-	if pkt_dir == PKT_DIR_INCOMING:
-		self.iface_int.send_ip_packet(DNS_packet)
-	else:
-		self.iface_ext.send_ip_packet(DNS_packet)
-
+	self.iface_int.send_ip_packet(DNS_packet)
+	return
     def make_RST(self, pkt, header_offset, pkt_direction):
 	RST_packet = ''
 	RST_packet += struct.pack('!B', 0x45)
@@ -437,9 +435,10 @@ class Firewall:
 	checksum2 = self.calc_checksum(32, pseudoheader)
 	RST_packet = RST_packet[0:36] + checksum2 + RST_packet[38:40]
 	if pkt_direction == PKT_DIR_INCOMING:
-		self.iface_int.send_ip_packet(RST_packet)
-	else:
 		self.iface_ext.send_ip_packet(RST_packet)
+	else:
+		self.iface_int.send_ip_packet(RST_packet)
+	return
 
     def calc_checksum(self, header_size, RST_packet):
 	checksum = 0
