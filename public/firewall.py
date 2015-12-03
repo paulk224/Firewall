@@ -50,7 +50,6 @@ class Firewall:
 		external_address = 0
 		domain_name = ''
 		DNS = False
-		QType = 0
 		IHL = ord(pkt[0]) & 0x0f
 	      	if IHL < 5:
 			return
@@ -118,7 +117,7 @@ class Firewall:
 		elif deny_pass == False:
 			if protocol == 6:
 				self.make_RST(pkt, IHL*4, pkt_dir)
-			if DNS == True and QType == 1:
+			if DNS == True:
 				self.make_DNS(pkt, IHL*4, DNS_offset, store_length, pkt_dir)
 			return
 	except (socket.error, struct.error, IndexError, KeyError, TypeError, ValueError, UnboundLocalError):
@@ -286,22 +285,18 @@ class Firewall:
 
                                     #if it's a response packet
                                     else:
-                                        print"response packet"
+                                        #print"response packet"
                                         #check for valid partner
                                         partner = self.TCP_connections.get(pair_id)
                                         if pair_id in self.TCP_connections and self.TCP_connections.get(pair_id)[2]:
                                             #parse necessary fields
                                             fields = self.TCP_connections.get(pair_id)[3]
                                             #print "before more fields", fields
-                                            line1 = http_header[0].split(" ")[2:]
-                                            status = ""
-                                            for word in line1:
-                                                status = status + word + " "
-                                            fields["status"] = status
+                                            fields["status"] = http_header[0].split(" ")[1]
                                             fields["size"] = http_header[http_header.index("content-length") + 1].strip()  
 
                                             #create log
-                                            http_log = fields["host"] + " " + fields["method"] + " " + fields["path"] + " " + fields["version"] + " " + fields["status"] + fields["size"] + "\r\n"
+                                            http_log = fields["host"] + " " + fields["method"] + " " + fields["path"] + " " + fields["version"] + " " + fields["status"] + " " + fields["size"] + "\r\n"
 
                                             #delete the packet string
                                             self.TCP_connections[identifier] = ("", next_seq, False, {})
@@ -403,8 +398,10 @@ class Firewall:
 	DNS_packet += struct.pack('!L', 0x1)
 	DNS_packet += struct.pack('!H', 0x4)
 	DNS_packet += struct.pack('!L', 0xA9E53182)
-	self.iface_int.send_ip_packet(DNS_packet)
-	return
+	if pkt_dir == PKT_DIR_INCOMING:
+		self.iface_int.send_ip_packet(DNS_packet)
+	else:
+		self.iface_ext.send_ip_packet(DNS_packet)
 
     def make_RST(self, pkt, header_offset, pkt_direction):
 	RST_packet = ''
@@ -440,10 +437,9 @@ class Firewall:
 	checksum2 = self.calc_checksum(32, pseudoheader)
 	RST_packet = RST_packet[0:36] + checksum2 + RST_packet[38:40]
 	if pkt_direction == PKT_DIR_INCOMING:
-		self.iface_ext.send_ip_packet(RST_packet)
-	else:
 		self.iface_int.send_ip_packet(RST_packet)
-	return
+	else:
+		self.iface_ext.send_ip_packet(RST_packet)
 
     def calc_checksum(self, header_size, RST_packet):
 	checksum = 0
