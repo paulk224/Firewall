@@ -209,21 +209,39 @@ class Firewall:
 
                                 #existing connection
                                 if identifier in self.TCP_connections:
-                                    #print "old connection", identifier
-                                    http_packet, pkt_seq = self.TCP_connections.get(identifier)[0], self.TCP_connections.get(identifier)[1]
+                                    http_packet, pkt_seq, pair_bool, fieldeez = self.TCP_connections.get(identifier)
+                                    #print "old connection", identifier, TCP_seq, " ", pkt_seq
+
                                     #if seq is what's expected, recognize as the next packet in line
                                     FIN_flag = ord(pkt[IHL*4 + 13]) & 0x01
                                     if FIN_flag:
-                                        http_packet = http_packet + TCP_payload
-                                        next_seq = TCP_seq + 1
+                                        #print "terminate connection"
+                                        del self.TCP_connections[identifier]
+                                        return True
                                     elif pkt_seq == TCP_seq:
-                                        http_packet += TCP_payload
-                                        next_seq = pkt_seq + len(TCP_payload)/4
+                                        next_seq = pkt_seq + len(TCP_payload)
+
                                     #let through old packets and drop all ones past expected
-                                    if pkt_seq < TCP_seq:
-                                        continue
                                     if pkt_seq > TCP_seq:
+                                        #print "backwards pass"
+                                        continue
+                                    if pkt_seq < TCP_seq:
+                                        #print "forward drop"
                                         return False
+
+                                    #if there are leftovers, don't start recording yet, but move onto the next packet
+                                    if "leftovers" in fieldeez:
+                                        #if "HTTP" in TCP_payload:
+                                                #print "burning through header ", fieldeez.get("leftovers"), TCP_payload
+                                        leftovers = fieldeez.get("leftovers") - len(TCP_payload)
+                                        if leftovers != 0:
+                                                fieldeez["leftovers"] = leftovers
+                                        else:
+                                                del fieldeez["leftovers"]
+                                        self.TCP_connections[identifier] = http_packet, next_seq, pair_bool, fieldeez
+                                        return True
+                                    else:
+                                        http_packet += TCP_payload
 
                                 #new connection, grab the http portion of the packet and calc the expected next seq
                                 #note: if not SYN packet, cannot be new connection/out of order packet, therefore ignore
@@ -233,14 +251,15 @@ class Firewall:
                                     http_packet = TCP_payload
                                     if SYN_flag:
                                         next_seq = TCP_seq + 1
+                                        #print "establishing connection, expected next seq: ", next_seq
                                     else:
                                         continue
 
-                                #once the packet is fully transmitted
+                                #once the packet header is fully transmitted
                                 if "\r\n\r\n" in http_packet:
-                                    #print "packet fully received"
+                                    #print "packet fully received", identifier
                                     #parse the http information
-                                    http_header = http_packet.split("\r\n\r\n")[0]
+                                    http_header, body = http_packet.split("\r\n\r\n")
                                     #print http_header
                                     http_header1 = http_header.lower().split("\r\n")
                                     http_header = []
@@ -281,8 +300,21 @@ class Firewall:
                                             fields["version"] = http_header[0].split(" ")[2].upper()
                                             #print fields
 
-                                            #save to TCP_connections
-                                            self.TCP_connections[identifier] = ("", next_seq, True, fields)
+                                            #if it has a body, check to see if all of the body has been delivered
+                                            leftovers = 0
+                                            if "content-length" in http_header:
+                                                leftovers = int(http_header[http_header.index("content-length") + 1]) - len(body)
+                                                fields["leftovers"] = leftovers
+                                                #print "leftovers: ", leftovers, ", body: ", len(body)
+
+                                            #if we expect more of the body, identify it for next packet (only time fields are not empty, and the pair boolean is False)
+                                            if leftovers:
+                                                self.TCP_connections[identifier] = ("", next_seq, False, fields)
+                                            #otherwise, wait nicely for new data, and for the response packet
+                                            else:
+                                                self.TCP_connections[identifier] = ("", next_seq, True, fields)
+
+                                            #print fields
 
                                     #if it's a response packet
                                     else:
@@ -294,22 +326,40 @@ class Firewall:
                                             fields = self.TCP_connections.get(pair_id)[3]
                                             #print "before more fields", fields
                                             fields["status"] = http_header[0].split(" ")[1]
-                                            fields["size"] = http_header[http_header.index("content-length") + 1].strip()  
+                                            #calculate the content-length and deal with the leftovers
+                                            if "content-length" in http_header:
+                                                bodyE = True
+                                                fields["size"] = http_header[http_header.index("content-length") + 1].strip()
+                                                leftovers = int(fields["size"]) - len(body)
+                                                fields["leftovers"] = leftovers
+                                            else:
+                                                bodyE = False
+                                                fields["size"] = "-1"
+                                                leftovers = 0
+                                                fields["leftovers"] = 0
 
                                             #create log
                                             http_log = fields["host"] + " " + fields["method"] + " " + fields["path"] + " " + fields["version"] + " " + fields["status"] + " " + fields["size"] + "\r\n"
-
-                                            #delete the packet string
-                                            self.TCP_connections[identifier] = ("", next_seq, False, {})
-
                                             #save log and print the results
-                                            #print http_log
+                                            #print "logged: " + http_log
                                             self.http_logFile.write(http_log)
                                             self.http_logFile.flush()
+
+                                            # if there are leftovers, do a similar thing to that crap we did with requests
+                                            if leftovers:
+                                                #print "leftovers: ", leftovers, ", fields:", fields
+                                                self.TCP_connections[identifier] = ("", next_seq, False, fields)
+                                            # if there is no more expected content, it's safe to log, clear, and start compiling next packet
+                                            else:
+
+                                                #clear the connections
+                                                self.TCP_connections[identifier] = ("", next_seq, False, {})
+                                                self.TCP_connections[pair_id] = partner[0], partner[1], False, {}
                                             
                                 #if the packet is not fully transmitted
                                 else:
                                     #save existing packet information to the connections
+                                    #print "header does not exist yet ", pkt
                                     self.TCP_connections[identifier] = (http_packet, next_seq, False, {})
                                     continue
 
