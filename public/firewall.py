@@ -210,7 +210,7 @@ class Firewall:
                                 #existing connection
                                 if identifier in self.TCP_connections:
                                     http_packet, pkt_seq, pair_bool, fieldeez = self.TCP_connections.get(identifier)
-                                    #print "old connection", identifier, TCP_seq, " ", pkt_seq
+                                    print "old connection", identifier, TCP_seq, " ", pkt_seq
 
                                     #if seq is what's expected, recognize as the next packet in line
                                     FIN_flag = ord(pkt[IHL*4 + 13]) & 0x01
@@ -247,7 +247,7 @@ class Firewall:
                                 #new connection, grab the http portion of the packet and calc the expected next seq
                                 #note: if not SYN packet, cannot be new connection/out of order packet, therefore ignore
                                 else:
-                                    #print "new connection", identifier
+                                    print "new connection", identifier
                                     SYN_flag = ord(pkt[IHL*4 + 13]) & 0x02
                                     http_packet = TCP_payload
                                     if SYN_flag:
@@ -258,16 +258,16 @@ class Firewall:
 
                                 #once the packet header is fully transmitted
                                 if "\r\n\r\n" in http_packet:
-                                    #print "packet fully received", identifier
+                                    print "packet fully received", identifier
                                     #parse the http information
                                     http_header, body = http_packet.split("\r\n\r\n")
-                                    #print http_header
-                                    http_header1 = http_header.lower().split("\r\n")
+                                    print http_header
+                                    http_header1 = http_header.split("\r\n")
                                     http_header = []
 
                                     for line in http_header1:
                                         if ':' in line:
-                                            field = line.split(":")
+                                            field = line.lower().split(":")
                                             http_header.append(field[0])
                                             http_header.append(field[1])
                                         else:
@@ -315,11 +315,11 @@ class Firewall:
                                             else:
                                                 self.TCP_connections[identifier] = ("", next_seq, True, fields)
 
-                                            #print fields
+                                            print fields
 
                                     #if it's a response packet
                                     else:
-                                        #print"response packet"
+                                        print"response packet"
                                         #check for valid partner
                                         partner = self.TCP_connections.get(pair_id)
                                         if pair_id in self.TCP_connections and self.TCP_connections.get(pair_id)[2]:
@@ -342,18 +342,19 @@ class Firewall:
                                             #create log
                                             http_log = fields["host"] + " " + fields["method"] + " " + fields["path"] + " " + fields["version"] + " " + fields["status"] + " " + fields["size"] + "\r\n"
                                             #save log and print the results
-                                            #print "logged: " + http_log
+                                            print "logged: " + http_log
                                             self.http_logFile.write(http_log)
                                             self.http_logFile.flush()
 
                                             # if there are leftovers, do a similar thing to that crap we did with requests
                                             if leftovers:
-                                                #print "leftovers: ", leftovers, ", fields:", fields
+                                                print "leftovers: ", leftovers, ", fields:", fields
                                                 self.TCP_connections[identifier] = ("", next_seq, False, fields)
                                             # if there is no more expected content, it's safe to log, clear, and start compiling next packet
                                             else:
 
                                                 #clear the connections
+						print "done with particular http request"
                                                 self.TCP_connections[identifier] = ("", next_seq, False, {})
                                                 self.TCP_connections[pair_id] = partner[0], partner[1], False, {}
                                             
@@ -370,7 +371,7 @@ class Firewall:
                                     
                         #run normal tcp_rulematching otherwise
                         else:
-                                #print "in tcp normal matchmaking"
+                                print "in tcp normal matchmaking"
 			        matches_port = False
 			        matches_address = False
 			        if rule_split[2] == 'any' or external_address == rule_split[2]:
