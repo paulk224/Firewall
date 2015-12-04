@@ -220,6 +220,7 @@ class Firewall:
                                         return True
                                     elif pkt_seq == TCP_seq:
                                         next_seq = pkt_seq + len(TCP_payload)
+                                        self.TCP_connections[identifier] = http_packet, next_seq, pair_bool, fieldeez
 
                                     #let through old packets and drop all ones past expected
                                     if pkt_seq > TCP_seq:
